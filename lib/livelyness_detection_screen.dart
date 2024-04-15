@@ -1,16 +1,20 @@
+
+
 import 'dart:async';
-import 'dart:ui' as ui;
+import 'dart:math';
 
-import 'package:collection/collection.dart';
-import 'package:flutter/foundation.dart';
+import 'package:camerawesome/camerawesome_plugin.dart' as cas;
+import 'package:camerawesome/camerawesome_plugin.dart';
+import 'package:demo_face_livelyness/index.dart';
+import 'package:demo_face_livelyness/src/core/extensions/ml_kit_extentention.dart';
+import 'package:demo_face_livelyness/src/core/models/captured_image.dart';
+import 'package:demo_face_livelyness/src/core/models/face_detection_model.dart';
+import 'package:demo_face_livelyness/src/screens/components/detection_widget.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:rxdart/rxdart.dart';
 
-import 'index.dart';
-import 'livelyness_detection.dart';
-
-List<CameraDescription> availableCams = [];
-
-class LivelynessDetectionScreen extends StatefulWidget {
+class LivelynessDetectionScreen extends StatelessWidget {
   final LivelynessDetectionConfig config;
 
   const LivelynessDetectionScreen({
@@ -19,29 +23,58 @@ class LivelynessDetectionScreen extends StatefulWidget {
   });
 
   @override
-  State<LivelynessDetectionScreen> createState() =>
-      _MLivelyness7DetectionScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: LivelynessDetectionScreenV2(
+          config: config,
+        ),
+      ),
+    );
+  }
 }
 
-class _MLivelyness7DetectionScreenState
-    extends State<LivelynessDetectionScreen> {
+class LivelynessDetectionScreenV2 extends StatefulWidget {
+  final LivelynessDetectionConfig config;
+
+  const LivelynessDetectionScreenV2({
+    required this.config,
+    super.key,
+  });
+
+  @override
+  State<LivelynessDetectionScreenV2> createState() =>
+      _LivelynessDetectionScreenAndroidState();
+}
+
+class _LivelynessDetectionScreenAndroidState
+    extends State<LivelynessDetectionScreenV2> {
   //* MARK: - Private Variables
   //? =========================================================
-  late bool _isInfoStepCompleted;
-  late final List<LivelynessStepItem> steps;
-  CameraController? _cameraController;
-  CustomPaint? _customPaint;
-  int _cameraIndex = 0;
-  bool _isBusy = false;
-  final GlobalKey<LivelynessDetectionStepOverlayState> _stepsKey =
-      GlobalKey<LivelynessDetectionStepOverlayState>();
-  bool _isProcessingStep = false;
+  final _faceDetectionController = BehaviorSubject<FaceDetectionModel>();
+
+  final options = FaceDetectorOptions(
+    enableContours: true,
+    enableClassification: true,
+    enableTracking: true,
+    enableLandmarks: true,
+    performanceMode: FaceDetectorMode.accurate,
+    minFaceSize: 0.05,
+  );
+  late final faceDetector = FaceDetector(options: options);
   bool _didCloseEyes = false;
-  bool _isTakingPicture = false;
-  Timer? _timerToDetectFace;
-  bool _isCaptureButtonVisible = false;
+  bool _isProcessingStep = false;
 
   late final List<LivelynessStepItem> _steps;
+  final GlobalKey<LivelynessDetectionStepOverlayState> _stepsKey =
+  GlobalKey<LivelynessDetectionStepOverlayState>();
+
+  cas.CameraState? _cameraState;
+  bool _isProcessing = false;
+  late bool _isInfoStepCompleted;
+  Timer? _timerToDetectFace;
+  bool _isCaptureButtonVisible = false;
+  bool _isCompleted = false;
 
   //* MARK: - Life Cycle Methods
   //? =========================================================
@@ -50,25 +83,22 @@ class _MLivelyness7DetectionScreenState
     _preInitCallBack();
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _postFrameCallBack(),
+          (_) => _postFrameCallBack(),
     );
+  }
+
+  @override
+  void deactivate() {
+    faceDetector.close();
+    super.deactivate();
   }
 
   @override
   void dispose() {
-    _cameraController?.dispose();
+    _faceDetectionController.close();
     _timerToDetectFace?.cancel();
     _timerToDetectFace = null;
     super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: _buildBody(),
-      ),
-    );
   }
 
   //* MARK: - Private Methods for Business Logic
@@ -78,184 +108,124 @@ class _MLivelyness7DetectionScreenState
     _isInfoStepCompleted = !widget.config.startWithInfoScreen;
   }
 
-  void _postFrameCallBack() async {
-    availableCams = await availableCameras();
-    if (availableCams.any(
-      (element) =>
-          element.lensDirection == CameraLensDirection.front &&
-          element.sensorOrientation == 90,
-    )) {
-      _cameraIndex = availableCams.indexOf(
-        availableCams.firstWhere((element) =>
-            element.lensDirection == CameraLensDirection.front &&
-            element.sensorOrientation == 90),
-      );
-    } else {
-      _cameraIndex = availableCams.indexOf(
-        availableCams.firstWhere(
-          (element) => element.lensDirection == CameraLensDirection.front,
-        ),
-      );
-    }
-    if (!widget.config.startWithInfoScreen) {
-      _startLiveFeed();
-    }
-  }
-
-  void _startTimer() {
-    _timerToDetectFace = Timer(
-      Duration(seconds: widget.config.maxSecToDetect),
-      () {
-        _timerToDetectFace?.cancel();
-        _timerToDetectFace = null;
-        if (widget.config.allowAfterMaxSec) {
-          _isCaptureButtonVisible = true;
-          setState(() {});
-          return;
-        }
-        _onDetectionCompleted(
-          imgToReturn: null,
-        );
-      },
-    );
-  }
-
-  void _startLiveFeed() async {
-    final camera = availableCams[_cameraIndex];
-    // _cameraController = CameraController(
-    //   camera,
-    //   ResolutionPreset.high,
-    //   imageFormatGroup: ImageFormatGroup.jpeg,
-    //   enableAudio: false,
-    // );
-    // _cameraController?.initialize().then((_) {
-    //   if (!mounted) {
-    //     return;
-    //   }
-    //   _cameraController?.startImageStream(_processCameraImage);
-    //   if (mounted) {
-    //     _startTimer();
-    //     setState(() {});
-    //   }
-    // });
-    _cameraController = CameraController(
-      camera,
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
-    _cameraController?.initialize().then((_) {
-      if (!mounted) {
-        return;
-      }
+  void _postFrameCallBack() {
+    if (_isInfoStepCompleted) {
       _startTimer();
-      _cameraController?.startImageStream(_processCameraImage);
-      setState(() {});
-    });
-  }
-
-  Future<void> _processCameraImage(CameraImage cameraImage) async {
-    final WriteBuffer allBytes = WriteBuffer();
-    for (final Plane plane in cameraImage.planes) {
-      allBytes.putUint8List(plane.bytes);
     }
-    final bytes = allBytes.done().buffer.asUint8List();
-
-    final Size imageSize = Size(
-      cameraImage.width.toDouble(),
-      cameraImage.height.toDouble(),
-    );
-
-    final camera = availableCams[_cameraIndex];
-    final imageRotation = InputImageRotationValue.fromRawValue(
-      camera.sensorOrientation,
-    );
-    if (imageRotation == null) return;
-
-    final inputImageFormat = InputImageFormatValue.fromRawValue(
-      cameraImage.format.raw,
-    );
-    if (inputImageFormat == null) return;
-
-    final planeData = cameraImage.planes.map(
-      (Plane plane) {
-        return InputImagePlaneMetadata(
-          bytesPerRow: plane.bytesPerRow,
-          height: plane.height,
-          width: plane.width,
-        );
-      },
-    ).toList();
-
-    final inputImageData = InputImageData(
-      size: imageSize,
-      imageRotation: imageRotation,
-      inputImageFormat: inputImageFormat,
-      planeData: planeData,
-    );
-
-    final inputImage = InputImage.fromBytes(
-      bytes: bytes,
-      inputImageData: inputImageData,
-    );
-
-    _processImage(inputImage);
   }
 
-  Future<void> _processImage(InputImage inputImage) async {
-    if (_isBusy) {
+  Future<void> _processCameraImage(AnalysisImage img) async {
+    if (_isProcessing) {
       return;
     }
-    _isBusy = true;
-    final faces = await MLHelper.instance.processInputImage(inputImage);
+    if (mounted) {
+      setState(
+            () => _isProcessing = true,
+      );
+    }
+    final inputImage = img.toInputImage();
 
-    if (!mounted) return;
-
-    if (inputImage.inputImageData?.size != null &&
-        inputImage.inputImageData?.imageRotation != null) {
-      if (faces.isEmpty) {
-        _resetSteps();
-      } else {
-        final firstFace = faces.first;
-        final painter = FaceDetectorPainter(
-          firstFace,
-          inputImage.inputImageData!.size,
-          inputImage.inputImageData!.imageRotation,
-        );
-        _customPaint = CustomPaint(
-          painter: painter,
-          child: Container(
-            color: Colors.transparent,
-            height: double.infinity,
-            width: double.infinity,
-            margin: EdgeInsets.only(
-              top: MediaQuery.of(context).padding.top,
-              bottom: MediaQuery.of(context).padding.bottom,
-            ),
-          ),
-        );
-        if (_isProcessingStep &&
-            _steps[_stepsKey.currentState?.currentIndex ?? 0].step ==
-                LivelynessCheckStep.blink) {
-          if (_didCloseEyes) {
-            if ((faces.first.leftEyeOpenProbability ?? 1.0) < 0.75 &&
-                (faces.first.rightEyeOpenProbability ?? 1.0) < 0.75) {
-              await _completeStep(
-                step: _steps[_stepsKey.currentState?.currentIndex ?? 0].step,
-              );
-            }
-          }
-        }
-        _detect(
-          face: faces.first,
-          step: _steps[_stepsKey.currentState?.currentIndex ?? 0].step,
+    try {
+      final List<Face> detectedFaces =
+      await faceDetector.processImage(inputImage);
+      _faceDetectionController.add(
+        FaceDetectionModel(
+          faces: detectedFaces,
+          absoluteImageSize: inputImage.inputImageData!.size,
+          rotation: 0,
+          imageRotation: img.inputImageRotation,
+          croppedSize: img.croppedSize,
+        ),
+      );
+      await _processImage(inputImage, detectedFaces);
+      if (mounted) {
+        setState(
+              () => _isProcessing = false,
         );
       }
-    } else {
-      _resetSteps();
+    } catch (error) {
+      if (mounted) {
+        setState(
+              () => _isProcessing = false,
+        );
+      }
+      debugPrint("...sending image resulted error $error");
     }
-    _isBusy = false;
-    if (mounted) {
-      setState(() {});
+  }
+
+  Future<void> _processImage(InputImage img, List<Face> faces) async {
+    try {
+      if (faces.isEmpty) {
+        _resetSteps();
+        return;
+      }
+      final Face firstFace = faces.first;
+      final landmarks = firstFace.landmarks;
+      // Get landmark positions for relevant facial features
+      final Point<int>? leftEye = landmarks[FaceLandmarkType.leftEye]?.position;
+      final Point<int>? rightEye =
+          landmarks[FaceLandmarkType.rightEye]?.position;
+      final Point<int>? leftCheek =
+          landmarks[FaceLandmarkType.leftCheek]?.position;
+      final Point<int>? rightCheek =
+          landmarks[FaceLandmarkType.rightCheek]?.position;
+      final Point<int>? leftEar = landmarks[FaceLandmarkType.leftEar]?.position;
+      final Point<int>? rightEar =
+          landmarks[FaceLandmarkType.rightEar]?.position;
+      final Point<int>? leftMouth =
+          landmarks[FaceLandmarkType.leftMouth]?.position;
+      final Point<int>? rightMouth =
+          landmarks[FaceLandmarkType.rightMouth]?.position;
+
+      // Calculate symmetry values based on corresponding landmark positions
+      final Map<String, double> symmetry = {};
+      final eyeSymmetry = calculateSymmetry(
+        leftEye,
+        rightEye,
+      );
+      symmetry['eyeSymmetry'] = eyeSymmetry;
+
+      final cheekSymmetry = calculateSymmetry(
+        leftCheek,
+        rightCheek,
+      );
+      symmetry['cheekSymmetry'] = cheekSymmetry;
+
+      final earSymmetry = calculateSymmetry(
+        leftEar,
+        rightEar,
+      );
+      symmetry['earSymmetry'] = earSymmetry;
+
+      final mouthSymmetry = calculateSymmetry(
+        leftMouth,
+        rightMouth,
+      );
+      symmetry['mouthSymmetry'] = mouthSymmetry;
+      double total = 0.0;
+      symmetry.forEach((key, value) {
+        total += value;
+      });
+      final double average = total / symmetry.length;
+      print("Face Symmetry: $average");
+      if (_isProcessingStep &&
+          _steps[_stepsKey.currentState?.currentIndex ?? 0].step ==
+              LivelynessCheckStep.blink) {
+        if (_didCloseEyes) {
+          if ((faces.first.leftEyeOpenProbability ?? 1.0) < 0.75 &&
+              (faces.first.rightEyeOpenProbability ?? 1.0) < 0.75) {
+            await _completeStep(
+              step: _steps[_stepsKey.currentState?.currentIndex ?? 0].step,
+            );
+          }
+        }
+      }
+      _detect(
+        face: firstFace,
+        step: _steps[_stepsKey.currentState?.currentIndex ?? 0].step,
+      );
+    } catch (e) {
+      _startProcessing();
     }
   }
 
@@ -263,7 +233,7 @@ class _MLivelyness7DetectionScreenState
     required LivelynessCheckStep step,
   }) async {
     final int indexToUpdate = _steps.indexWhere(
-      (p0) => p0.step == step,
+          (p0) => p0.step == step,
     );
 
     _steps[indexToUpdate] = _steps[indexToUpdate].copyWith(
@@ -276,45 +246,139 @@ class _MLivelyness7DetectionScreenState
     _stopProcessing();
   }
 
-  void _takePicture() async {
-    try {
-      if (_cameraController == null) return;
-      // if (face == null) return;
-      if (_isTakingPicture) {
-        return;
-      }
-      setState(
-        () => _isTakingPicture = true,
-      );
-      await _cameraController?.stopImageStream();
-      final XFile? clickedImage = await _cameraController?.takePicture();
-      if (clickedImage == null) {
-        _startLiveFeed();
-        return;
-      }
-      _onDetectionCompleted(imgToReturn: clickedImage);
-    } catch (e) {
-      _startLiveFeed();
+  void _detect({
+    required Face face,
+    required LivelynessCheckStep step,
+  }) async {
+    switch (step) {
+      case LivelynessCheckStep.blink:
+        const double blinkThreshold = 0.25;
+        if ((face.leftEyeOpenProbability ?? 1.0) < (blinkThreshold) &&
+            (face.rightEyeOpenProbability ?? 1.0) < (blinkThreshold)) {
+          _startProcessing();
+          if (mounted) {
+            setState(
+                  () => _didCloseEyes = true,
+            );
+          }
+        }
+        break;
+      case LivelynessCheckStep.turnLeft:
+        const double headTurnThreshold = 45.0;
+        if ((face.headEulerAngleY ?? 0) > (headTurnThreshold)) {
+          _startProcessing();
+          await _completeStep(step: step);
+        }
+        break;
+      case LivelynessCheckStep.turnRight:
+        const double headTurnThreshold = -45.0;
+        if ((face.headEulerAngleY ?? 0) < (headTurnThreshold)) {
+          _startProcessing();
+          await _completeStep(step: step);
+        }
+        break;
+      case LivelynessCheckStep.smile:
+        const double smileThreshold = 0.75;
+        if ((face.smilingProbability ?? 0) > (smileThreshold)) {
+          _startProcessing();
+          await _completeStep(step: step);
+        }
+        break;
     }
   }
 
+  void _startProcessing() {
+    if (!mounted) {
+      return;
+    }
+    setState(
+          () => _isProcessingStep = true,
+    );
+  }
+
+  void _stopProcessing() {
+    if (!mounted) {
+      return;
+    }
+    setState(
+          () => _isProcessingStep = false,
+    );
+  }
+
+  void _startTimer() {
+    _timerToDetectFace = Timer(
+      Duration(seconds: widget.config.maxSecToDetect),
+          () {
+        _timerToDetectFace?.cancel();
+        _timerToDetectFace = null;
+        if (widget.config.allowAfterMaxSec) {
+          _isCaptureButtonVisible = true;
+          if (mounted) {
+            setState(() {});
+          }
+          return;
+        }
+        _onDetectionCompleted(
+          imgToReturn: null,
+        );
+      },
+    );
+  }
+
+  Future<void> _takePicture({
+    required bool didCaptureAutomatically,
+  }) async {
+    if (_cameraState == null) {
+      _onDetectionCompleted();
+      return;
+    }
+    _cameraState?.when(
+      onPhotoMode: (p0) => Future.delayed(
+        const Duration(milliseconds: 500),
+            () => p0.takePhoto().then(
+              (value) {
+            _onDetectionCompleted(
+              imgToReturn: value,
+              didCaptureAutomatically: didCaptureAutomatically,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   void _onDetectionCompleted({
-    XFile? imgToReturn,
+    String? imgToReturn,
+    bool? didCaptureAutomatically,
   }) {
-    final String? imgPath = imgToReturn?.path;
-    Navigator.of(context).pop(imgPath);
+    if (_isCompleted) {
+      return;
+    }
+    setState(
+          () => _isCompleted = true,
+    );
+    final String imgPath = imgToReturn ?? "";
+    if (imgPath.isEmpty || didCaptureAutomatically == null) {
+      Navigator.of(context).pop(null);
+      return;
+    }
+    Navigator.of(context).pop(
+      CapturedImage(
+        imgPath: imgPath,
+        didCaptureAutomatically: didCaptureAutomatically,
+      ),
+    );
   }
 
   void _resetSteps() async {
     for (var p0 in _steps) {
       final int index = _steps.indexWhere(
-        (p1) => p1.step == p0.step,
+            (p1) => p1.step == p0.step,
       );
       _steps[index] = _steps[index].copyWith(
         isCompleted: false,
       );
     }
-    _customPaint = null;
     _didCloseEyes = false;
     if (_stepsKey.currentState?.currentIndex != 0) {
       _stepsKey.currentState?.reset();
@@ -324,169 +388,69 @@ class _MLivelyness7DetectionScreenState
     }
   }
 
-  void _startProcessing() {
-    if (!mounted) {
-      return;
-    }
-    setState(
-      () => _isProcessingStep = true,
-    );
-  }
-
-  void _stopProcessing() {
-    if (!mounted) {
-      return;
-    }
-    setState(
-      () => _isProcessingStep = false,
-    );
-  }
-
-  void _detect({
-    required Face face,
-    required LivelynessCheckStep step,
-  }) async {
-    if (_isProcessingStep) {
-      return;
-    }
-    switch (step) {
-      case LivelynessCheckStep.blink:
-        final BlinkDetectionThreshold? blinkThreshold =
-            LivelynessDetection.instance.thresholdConfig.firstWhereOrNull(
-          (p0) => p0 is BlinkDetectionThreshold,
-        ) as BlinkDetectionThreshold?;
-        if ((face.leftEyeOpenProbability ?? 1.0) <
-                (blinkThreshold?.leftEyeProbability ?? 0.25) &&
-            (face.rightEyeOpenProbability ?? 1.0) <
-                (blinkThreshold?.rightEyeProbability ?? 0.25)) {
-          _startProcessing();
-          if (mounted) {
-            setState(
-              () => _didCloseEyes = true,
-            );
-          }
-        }
-        break;
-      case LivelynessCheckStep.turnLeft:
-        final HeadTurnDetectionThreshold? headTurnThreshold =
-            LivelynessDetection.instance.thresholdConfig.firstWhereOrNull(
-          (p0) => p0 is HeadTurnDetectionThreshold,
-        ) as HeadTurnDetectionThreshold?;
-        if ((face.headEulerAngleY ?? 0) >
-            (headTurnThreshold?.rotationAngle ?? 45)) {
-          _startProcessing();
-          await _completeStep(step: step);
-        }
-        break;
-      case LivelynessCheckStep.turnRight:
-        final HeadTurnDetectionThreshold? headTurnThreshold =
-            LivelynessDetection.instance.thresholdConfig.firstWhereOrNull(
-          (p0) => p0 is HeadTurnDetectionThreshold,
-        ) as HeadTurnDetectionThreshold?;
-        if ((face.headEulerAngleY ?? 0) >
-            (headTurnThreshold?.rotationAngle ?? -50)) {
-          _startProcessing();
-          await _completeStep(step: step);
-        }
-        break;
-      case LivelynessCheckStep.smile:
-        final SmileDetectionThreshold? smileThreshold =
-            LivelynessDetection.instance.thresholdConfig.firstWhereOrNull(
-          (p0) => p0 is SmileDetectionThreshold,
-        ) as SmileDetectionThreshold?;
-        if ((face.smilingProbability ?? 0) >
-            (smileThreshold?.probability ?? 0.75)) {
-          _startProcessing();
-          await _completeStep(step: step);
-        }
-        break;
-    }
-  }
-
   //* MARK: - Private Methods for UI Components
   //? =========================================================
-  Widget _buildBody() {
-    return Stack(
-      children: [
-        _isInfoStepCompleted
-            ? _buildDetectionBody()
-            : LivelynessInfoWidget(
-                onStartTap: () {
-                  if (mounted) {
-                    setState(
-                      () => _isInfoStepCompleted = true,
-                    );
-                  }
-                  _startLiveFeed();
-                },
-              ),
-        Align(
-          alignment: Alignment.topRight,
-          child: Padding(
-            padding: const EdgeInsets.only(
-              right: 10,
-              top: 10,
-            ),
-            child: CircleAvatar(
-              radius: 20,
-              backgroundColor: Colors.black,
-              child: IconButton(
-                onPressed: () => _onDetectionCompleted(
-                  imgToReturn: null,
-                ),
-                icon: const Icon(
-                  Icons.close_rounded,
-                  size: 20,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDetectionBody() {
-    if (_cameraController == null ||
-        _cameraController?.value.isInitialized == false) {
-      return const Center(
-        child: CircularProgressIndicator.adaptive(),
-      );
-    }
-    final size = MediaQuery.of(context).size;
-    var scale = size.aspectRatio * _cameraController!.value.aspectRatio;
-    if (scale < 1) scale = 1 / scale;
-    final Widget cameraView = CameraPreview(_cameraController!);
+  @override
+  Widget build(BuildContext context) {
     return Stack(
       fit: StackFit.expand,
+      alignment: Alignment.center,
       children: [
-        /*  Center(
-          child: cameraView,
-        ),*/
-        BackdropFilter(
-          filter: ui.ImageFilter.blur(
-            sigmaX: 5.0,
-            sigmaY: 5.0,
+        _isInfoStepCompleted
+            ? cas.CameraAwesomeBuilder.custom(
+          flashMode: cas.FlashMode.auto,
+          previewFit: cas.CameraPreviewFit.contain,
+          aspectRatio: cas.CameraAspectRatios.ratio_16_9,
+          sensor: cas.Sensors.front,
+          onImageForAnalysis: (img) => _processCameraImage(img),
+          imageAnalysisConfig: cas.AnalysisConfig(
+            autoStart: true,
+            androidOptions: const cas.AndroidAnalysisOptions.nv21(
+              width: 250,
+            ),
+            maxFramesPerSecond: 30,
           ),
-          child: Container(
-            color: Colors.transparent,
-            width: double.infinity,
-            height: double.infinity,
+          builder: (state, previewSize, previewRect) {
+            _cameraState = state;
+            return PreviewDecoratorWidget(
+              cameraState: state,
+              faceDetectionStream: _faceDetectionController,
+              previewSize: previewSize,
+              previewRect: previewRect,
+              detectionColor:
+              _steps[_stepsKey.currentState?.currentIndex ?? 0]
+                  .detectionColor,
+            );
+          },
+          saveConfig: SaveConfig.photo(
+            pathBuilder: () async {
+              final String fileName = "${Utils.generate()}.jpg";
+              final String path = await getTemporaryDirectory().then(
+                    (value) => value.path,
+              );
+              return "$path/$fileName";
+            },
           ),
+        )
+            : LivelynessInfoWidget(
+          onStartTap: () {
+            if (!mounted) {
+              return;
+            }
+            _startTimer();
+            setState(
+                  () => _isInfoStepCompleted = true,
+            );
+          },
         ),
-        Center(
-          child: cameraView,
-        ),
-        if (_customPaint != null) _customPaint!,
-        LivelynessDetectionStepOverlay(
-          key: _stepsKey,
-          steps: _steps,
-          onCompleted: () => Future.delayed(
-            const Duration(milliseconds: 500),
-            () => _takePicture(),
+        if (_isInfoStepCompleted)
+          LivelynessDetectionStepOverlay(
+            key: _stepsKey,
+            steps: _steps,
+            onCompleted: () => _takePicture(
+              didCaptureAutomatically: true,
+            ),
           ),
-        ),
         Visibility(
           visible: _isCaptureButtonVisible,
           child: Column(
@@ -498,7 +462,9 @@ class _MLivelyness7DetectionScreenState
                 flex: 20,
               ),
               MaterialButton(
-                onPressed: () => _takePicture(),
+                onPressed: () => _takePicture(
+                  didCaptureAutomatically: false,
+                ),
                 color: widget.config.captureButtonColor ??
                     Theme.of(context).primaryColor,
                 textColor: Colors.white,
@@ -513,7 +479,46 @@ class _MLivelyness7DetectionScreenState
             ],
           ),
         ),
+        Align(
+          alignment: Alignment.topRight,
+          child: Padding(
+            padding: const EdgeInsets.only(
+              right: 10,
+              top: 10,
+            ),
+            child: CircleAvatar(
+              radius: 20,
+              backgroundColor: Colors.black,
+              child: IconButton(
+                onPressed: () {
+                  _onDetectionCompleted(
+                    imgToReturn: null,
+                    didCaptureAutomatically: null,
+                  );
+                },
+                icon: const Icon(
+                  Icons.close_rounded,
+                  size: 20,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ),
       ],
     );
+  }
+
+  double calculateSymmetry(
+      Point<int>? leftPosition, Point<int>? rightPosition) {
+    if (leftPosition != null && rightPosition != null) {
+      final double dx = (rightPosition.x - leftPosition.x).abs().toDouble();
+      final double dy = (rightPosition.y - leftPosition.y).abs().toDouble();
+      final distance = Offset(dx, dy).distance;
+
+      return distance;
+    }
+
+    return 0.0;
   }
 }

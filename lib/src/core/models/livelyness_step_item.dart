@@ -1,5 +1,5 @@
-
 import 'package:demo_face_livelyness/index.dart';
+import 'package:flutter/material.dart';
 
 class LivelynessStepItem {
   //enum
@@ -7,12 +7,14 @@ class LivelynessStepItem {
   final String title;
   final double? thresholdToCheck;
   final bool isCompleted;
+  final Color? detectionColor;
 
   LivelynessStepItem({
     required this.step,
     required this.title,
     this.thresholdToCheck,
     required this.isCompleted,
+    this.detectionColor,
   });
 
   LivelynessStepItem copyWith({
@@ -20,12 +22,14 @@ class LivelynessStepItem {
     String? title,
     double? thresholdToCheck,
     bool? isCompleted,
+    Color? detectionColor,
   }) {
     return LivelynessStepItem(
       step: step ?? this.step,
       title: title ?? this.title,
       thresholdToCheck: thresholdToCheck ?? this.thresholdToCheck,
       isCompleted: isCompleted ?? this.isCompleted,
+      detectionColor: detectionColor ?? this.detectionColor,
     );
   }
 
@@ -38,6 +42,9 @@ class LivelynessStepItem {
       result.addAll({'thresholdToCheck': thresholdToCheck});
     }
     result.addAll({'isCompleted': isCompleted});
+    if (detectionColor != null) {
+      result.addAll({'detectionColor': detectionColor!.value});
+    }
 
     return result;
   }
@@ -48,6 +55,8 @@ class LivelynessStepItem {
       title: map['title'] ?? '',
       thresholdToCheck: map['thresholdToCheck']?.toDouble(),
       isCompleted: map['isCompleted'] ?? false,
+      detectionColor:
+          map['detectionColor'] != null ? Color(map['detectionColor']) : null,
     );
   }
 
@@ -58,7 +67,7 @@ class LivelynessStepItem {
 
   @override
   String toString() {
-    return 'M7LivelynessStepItem(step: $step, title: $title, thresholdToCheck: $thresholdToCheck, isCompleted: $isCompleted)';
+    return 'LivelynessStepItem(step: $step, title: $title, thresholdToCheck: $thresholdToCheck, isCompleted: $isCompleted, detectionColor: $detectionColor)';
   }
 
   @override
@@ -69,7 +78,8 @@ class LivelynessStepItem {
         other.step == step &&
         other.title == title &&
         other.thresholdToCheck == thresholdToCheck &&
-        other.isCompleted == isCompleted;
+        other.isCompleted == isCompleted &&
+        other.detectionColor == detectionColor;
   }
 
   @override
@@ -77,6 +87,7 @@ class LivelynessStepItem {
     return step.hashCode ^
         title.hashCode ^
         thresholdToCheck.hashCode ^
-        isCompleted.hashCode;
+        isCompleted.hashCode ^
+        detectionColor.hashCode;
   }
 }

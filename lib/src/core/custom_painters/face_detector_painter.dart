@@ -1,313 +1,285 @@
+import 'dart:io';
 import 'dart:math';
+import 'dart:ui';
 
-//sky_engine/lib/ui/painting.dart
-import 'package:demo_face_livelyness/livelyness_detection.dart';
-import 'package:flutter/material.dart';
+import 'package:camerawesome/pigeon.dart';
 import 'package:demo_face_livelyness/index.dart';
+import 'package:demo_face_livelyness/livelyness_detection.dart';
+import 'package:demo_face_livelyness/src/core/models/face_detection_model.dart';
+import 'package:flutter/material.dart';
 
-class FaceDetectorPainter extends CustomPainter {
-  FaceDetectorPainter(
-    this.face,
-    this.absoluteImageSize,
-    this.rotation,
-  );
+class AndroidFaceDetectorPainter extends CustomPainter {
+  final FaceDetectionModel model;
+  final PreviewSize previewSize;
+  final Rect previewRect;
+  final bool isBackCamera;
+  final Color? detectionColor;
+  late DashedPathProperties _dashedPathProperties;
 
-  final Face face;
-  final Size absoluteImageSize;
-  final InputImageRotation rotation;
+  AndroidFaceDetectorPainter({
+    required this.model,
+    required this.previewSize,
+    required this.previewRect,
+    required this.isBackCamera,
+    this.detectionColor,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final Paint paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0
-      ..color = LivelynessDetection.instance.contourDetectionColor ??
-          const Color(0xffab48e0);
+    _dashedPathProperties = DashedPathProperties(
+      path: Path(),
+      dashLength: 5.0,
+      dashGapLength: 2.5,
+    );
+    final croppedSize = model.croppedSize;
 
-    void paintContour(FaceContourType type) {
-      final faceContour = face.contours[type];
-      if (faceContour?.points != null) {
-        for (var i = 0; i < faceContour!.points.length; i++) {
-          final Point<int> p1 = faceContour.points[i];
-          if (i + 1 < faceContour.points.length) {
-            final Point<int> p2 = faceContour.points[i + 1];
-            canvas.drawLine(
-              Offset(
-                M7MathHelper.instance.translateX(
-                  p1.x.toDouble(),
-                  rotation,
-                  size,
-                  absoluteImageSize,
+    final ratioAnalysisToPreview = previewSize.width / croppedSize.width;
+
+    bool flipXY = false;
+    if (Platform.isAndroid) {
+      // Symmetry for Android since native image analysis is not mirrored but preview is
+      // It also handles device rotation
+      switch (model.imageRotation) {
+        case InputImageRotation.rotation0deg:
+          if (isBackCamera) {
+            flipXY = true;
+            canvas.scale(-1, 1);
+            canvas.translate(-size.width, 0);
+          } else {
+            flipXY = true;
+            canvas.scale(-1, -1);
+            canvas.translate(-size.width, -size.height);
+          }
+          break;
+        case InputImageRotation.rotation90deg:
+          if (isBackCamera) {
+            // No changes
+          } else {
+            canvas.scale(1, -1);
+            canvas.translate(0, -size.height);
+          }
+          break;
+        case InputImageRotation.rotation180deg:
+          if (isBackCamera) {
+            flipXY = true;
+            canvas.scale(1, -1);
+            canvas.translate(0, -size.height);
+          } else {
+            flipXY = true;
+          }
+          break;
+        default:
+        // 270 or null
+          if (isBackCamera) {
+            canvas.scale(-1, -1);
+            canvas.translate(-size.width, -size.height);
+          } else {
+            canvas.scale(-1, 1);
+            canvas.translate(-size.width, 0);
+          }
+      }
+    }
+
+    for (final Face face in model.faces) {
+      Map<FaceContourType, Path> paths = {
+        for (var fct in FaceContourType.values) fct: Path()
+      };
+      face.contours.forEach((contourType, faceContour) {
+        if (faceContour != null) {
+          paths[contourType]!.addPolygon(
+              faceContour.points
+                  .map(
+                    (element) => _croppedPosition(
+                  element,
+                  croppedSize: croppedSize,
+                  painterSize: size,
+                  ratio: ratioAnalysisToPreview,
+                  flipXY: flipXY,
                 ),
-                M7MathHelper.instance.translateY(
-                  p1.y.toDouble(),
-                  rotation,
-                  size,
-                  absoluteImageSize,
+              )
+                  .toList(),
+              true);
+          if (LivelynessDetection.instance.displayDots) {
+            for (var element in faceContour.points) {
+              canvas.drawCircle(
+                _croppedPosition(
+                  element,
+                  croppedSize: croppedSize,
+                  painterSize: size,
+                  ratio: ratioAnalysisToPreview,
+                  flipXY: flipXY,
                 ),
-              ),
-              Offset(
-                M7MathHelper.instance.translateX(
-                  p2.x.toDouble(),
-                  rotation,
-                  size,
-                  absoluteImageSize,
-                ),
-                M7MathHelper.instance.translateY(
-                  p2.y.toDouble(),
-                  rotation,
-                  size,
-                  absoluteImageSize,
-                ),
-              ),
-              paint,
-            );
+                4,
+                Paint()
+                  ..color = detectionColor ??
+                      LivelynessDetection.instance.contourDotColor ??
+                      Colors.purple.shade800
+                  ..strokeWidth =
+                      LivelynessDetection.instance.contourDotRadius ?? 2,
+              );
+            }
           }
         }
-        for (final Point point in faceContour.points) {
-          canvas.drawCircle(
-            Offset(
-              M7MathHelper.instance.translateX(
-                point.x.toDouble(),
-                rotation,
-                size,
-                absoluteImageSize,
-              ),
-              M7MathHelper.instance.translateY(
-                point.y.toDouble(),
-                rotation,
-                size,
-                absoluteImageSize,
-              ),
-            ),
-            1,
-            paint,
+      });
+      paths.removeWhere((key, value) => value.getBounds().isEmpty);
+      if (LivelynessDetection.instance.displayLines) {
+        for (var p in paths.entries) {
+          final Path finalPath = LivelynessDetection.instance.displayDash
+              ? _getDashedPath(
+            p.value,
+            LivelynessDetection.instance.dashLength,
+            LivelynessDetection.instance.dashGap,
+          )
+              : p.value;
+          canvas.drawPath(
+            finalPath,
+            Paint()
+              ..color = detectionColor ??
+                  LivelynessDetection.instance.contourLineColor ??
+                  Colors.white
+              ..strokeWidth =
+                  LivelynessDetection.instance.contourLineWidth ?? 1.6
+              ..style = PaintingStyle.stroke,
           );
         }
       }
     }
-
-    paintContour(FaceContourType.face);
-    paintContour(FaceContourType.leftEyebrowTop);
-    paintContour(FaceContourType.leftEyebrowBottom);
-    paintContour(FaceContourType.rightEyebrowTop);
-    paintContour(FaceContourType.rightEyebrowBottom);
-    paintContour(FaceContourType.leftEye);
-    paintContour(FaceContourType.rightEye);
-    paintContour(FaceContourType.upperLipTop);
-    paintContour(FaceContourType.upperLipBottom);
-    paintContour(FaceContourType.lowerLipTop);
-    paintContour(FaceContourType.lowerLipBottom);
-    paintContour(FaceContourType.noseBridge);
-    paintContour(FaceContourType.noseBottom);
-    paintContour(FaceContourType.leftCheek);
-    paintContour(FaceContourType.rightCheek);
   }
 
   @override
-  bool shouldRepaint(FaceDetectorPainter oldDelegate) {
-    return oldDelegate.absoluteImageSize != absoluteImageSize ||
-        oldDelegate.face != face;
+  bool shouldRepaint(AndroidFaceDetectorPainter oldDelegate) {
+    return oldDelegate.isBackCamera != isBackCamera ||
+        oldDelegate.previewSize.width != previewSize.width ||
+        oldDelegate.previewSize.height != previewSize.height ||
+        oldDelegate.previewRect != previewRect ||
+        oldDelegate.model != model;
+  }
+
+  Offset _croppedPosition(
+      Point<int> element, {
+        required Size croppedSize,
+        required Size painterSize,
+        required double ratio,
+        required bool flipXY,
+      }) {
+    num imageDiffX;
+    num imageDiffY;
+    if (Platform.isIOS) {
+      imageDiffX = model.absoluteImageSize.width - croppedSize.width;
+      imageDiffY = model.absoluteImageSize.height - croppedSize.height;
+    } else {
+      imageDiffX = model.absoluteImageSize.height - croppedSize.width;
+      imageDiffY = model.absoluteImageSize.width - croppedSize.height;
+    }
+
+    return (Offset(
+      (flipXY ? element.y : element.x).toDouble() - (imageDiffX / 2),
+      (flipXY ? element.x : element.y).toDouble() - (imageDiffY / 2),
+    ) *
+        ratio)
+        .translate(
+      (painterSize.width - (croppedSize.width * ratio)) / 2,
+      (painterSize.height - (croppedSize.height * ratio)) / 2,
+    );
+  }
+
+  Path _getDashedPath(
+      Path originalPath,
+      double dashLength,
+      double dashGapLength,
+      ) {
+    final metricsIterator = originalPath.computeMetrics().iterator;
+    while (metricsIterator.moveNext()) {
+      final metric = metricsIterator.current;
+      _dashedPathProperties.extractedPathLength = 0.0;
+      while (_dashedPathProperties.extractedPathLength < metric.length) {
+        if (_dashedPathProperties.addDashNext) {
+          _dashedPathProperties.addDash(metric, dashLength);
+        } else {
+          _dashedPathProperties.addDashGap(metric, dashGapLength);
+        }
+      }
+    }
+    return _dashedPathProperties.path;
   }
 }
 
-//! TODO: - Kept for future release
-//? =========================================================
-// class M7MeshPainter extends CustomPainter {
-//   M7MeshPainter(
-//     this.face,
-//     this.absoluteImageSize,
-//     this.rotation,
-//   );
+class DashedPathProperties {
+  double extractedPathLength;
+  Path path;
 
-//   final Face face;
-//   final Size absoluteImageSize;
-//   final InputImageRotation rotation;
+  final double _dashLength;
+  double _remainingDashLength;
+  double _remainingDashGapLength;
+  bool _previousWasDash;
 
-//   @override
-//   void paint(Canvas canvas, Size size) {
-//     final Paint paint = Paint()
-//       ..style = PaintingStyle.stroke
-//       ..strokeWidth = 1.0
-//       ..color = const Color(0xffab48e0);
+  DashedPathProperties({
+    required this.path,
+    required double dashLength,
+    required double dashGapLength,
+  })  : assert(dashLength > 0.0, 'dashLength must be > 0.0'),
+        assert(dashGapLength > 0.0, 'dashGapLength must be > 0.0'),
+        _dashLength = dashLength,
+        _remainingDashLength = dashLength,
+        _remainingDashGapLength = dashGapLength,
+        _previousWasDash = false,
+        extractedPathLength = 0.0;
 
-//     final Paint paint2 = Paint()
-//       ..style = PaintingStyle.stroke
-//       ..strokeWidth = 2.0
-//       ..color = Colors.red;
+  bool get addDashNext {
+    if (!_previousWasDash || _remainingDashLength != _dashLength) {
+      return true;
+    }
+    return false;
+  }
 
-//     void paintContour(FaceContourType type) {
-//       final faceContour = face.contours[type];
-//       if (faceContour?.points != null) {
-//         for (final Point point in faceContour!.points) {
-//           canvas.drawCircle(
-//             Offset(
-//               M7MathHelper.instance.translateX(
-//                 point.x.toDouble(),
-//                 rotation,
-//                 size,
-//                 absoluteImageSize,
-//               ),
-//               M7MathHelper.instance.translateY(
-//                 point.y.toDouble(),
-//                 rotation,
-//                 size,
-//                 absoluteImageSize,
-//               ),
-//             ),
-//             1,
-//             paint,
-//           );
-//         }
-//       }
-//     }
+  void addDash(PathMetric metric, double dashLength) {
+    // Calculate lengths (actual + available)
+    final end = _calculateLength(metric, _remainingDashLength);
+    final availableEnd = _calculateLength(metric, dashLength);
+    // Add path
+    final pathSegment = metric.extractPath(extractedPathLength, end);
+    path.addPath(pathSegment, Offset.zero);
+    // Update
+    final delta = _remainingDashLength - (end - extractedPathLength);
+    _remainingDashLength = _updateRemainingLength(
+      delta: delta,
+      end: end,
+      availableEnd: availableEnd,
+      initialLength: dashLength,
+    );
+    extractedPathLength = end;
+    _previousWasDash = true;
+  }
 
-//     void dwarLine({
-//       required int px,
-//       required int py,
-//       required int qx,
-//       required int qy,
-//     }) {
-//       canvas.drawLine(
-//         Offset(
-//           M7MathHelper.instance.translateX(
-//             px.toDouble(),
-//             rotation,
-//             size,
-//             absoluteImageSize,
-//           ),
-//           M7MathHelper.instance.translateY(
-//             py.toDouble(),
-//             rotation,
-//             size,
-//             absoluteImageSize,
-//           ),
-//         ),
-//         Offset(
-//           M7MathHelper.instance.translateX(
-//             qx.toDouble(),
-//             rotation,
-//             size,
-//             absoluteImageSize,
-//           ),
-//           M7MathHelper.instance.translateY(
-//             qy.toDouble(),
-//             rotation,
-//             size,
-//             absoluteImageSize,
-//           ),
-//         ),
-//         paint2,
-//       );
-//     }
+  void addDashGap(PathMetric metric, double dashGapLength) {
+    // Calculate lengths (actual + available)
+    final end = _calculateLength(metric, _remainingDashGapLength);
+    final availableEnd = _calculateLength(metric, dashGapLength);
+    // Move path's end point
+    Tangent tangent = metric.getTangentForOffset(end)!;
+    path.moveTo(tangent.position.dx, tangent.position.dy);
+    // Update
+    final delta = end - extractedPathLength;
+    _remainingDashGapLength = _updateRemainingLength(
+      delta: delta,
+      end: end,
+      availableEnd: availableEnd,
+      initialLength: dashGapLength,
+    );
+    extractedPathLength = end;
+    _previousWasDash = false;
+  }
 
-//     final List<Point<int>> faceEdges =
-//         face.contours[FaceContourType.face]?.points ?? [];
+  double _calculateLength(PathMetric metric, double addedLength) {
+    return min(extractedPathLength + addedLength, metric.length);
+  }
 
-//     //* MARK: - Left Side
-//     //? =========================================================
-//     final List<Point<int>> leftEyebrowBottom =
-//         face.contours[FaceContourType.leftEyebrowBottom]?.points ?? [];
-//     final List<Point<int>> leftEyebrowTop =
-//         face.contours[FaceContourType.leftEyebrowTop]?.points ?? [];
-//     final List<Point<int>> leftEye =
-//         face.contours[FaceContourType.leftEye]?.points ?? [];
-//     final List<Point<int>> leftCheek =
-//         face.contours[FaceContourType.leftCheek]?.points ?? [];
-
-//     //* MARK: - Right Side
-//     //? =========================================================
-//     final List<Point<int>> rightEyebrowTop =
-//         face.contours[FaceContourType.rightEyebrowTop]?.points ?? [];
-//     final List<Point<int>> rightEyebrowBottom =
-//         face.contours[FaceContourType.rightEyebrowBottom]?.points ?? [];
-//     final List<Point<int>> rightEye =
-//         face.contours[FaceContourType.rightEye]?.points ?? [];
-//     final List<Point<int>> rightCheek =
-//         face.contours[FaceContourType.rightCheek]?.points ?? [];
-
-//     //* MARK: - Nose
-//     //? =========================================================
-//     final List<Point<int>> noseBottom =
-//         face.contours[FaceContourType.noseBottom]?.points ?? [];
-//     final List<Point<int>> noseBridge =
-//         face.contours[FaceContourType.noseBridge]?.points ?? [];
-
-//     //* MARK: - Lips
-//     //? =========================================================
-//     final List<Point<int>> upperLipTop =
-//         face.contours[FaceContourType.upperLipTop]?.points ?? [];
-//     final List<Point<int>> upperLipBottom =
-//         face.contours[FaceContourType.upperLipBottom]?.points ?? [];
-
-//     final List<Point<int>> lowerLipTop =
-//         face.contours[FaceContourType.lowerLipTop]?.points ?? [];
-//     final List<Point<int>> lowerLipBottom =
-//         face.contours[FaceContourType.lowerLipBottom]?.points ?? [];
-
-//     final List<List<Point<int>>> partitions = faceEdges.splitInChunks(
-//       chunkSize: faceEdges.length ~/ 4,
-//     );
-//     if (partitions.length != 4) {
-//       return;
-//     }
-
-//     //* MARK: - Top Right
-//     //? =========================================================
-//     final List<Point<int>> topRightFaceEdges = partitions[0];
-//     if (topRightFaceEdges.length == 9) {
-//       final List<Point<int>> rightEyebrowTopR =
-//           rightEyebrowTop.reversed.toList();
-//       for (var i = 0; i < rightEyebrowTopR.length; i++) {
-//         final p0 = rightEyebrowTopR[i];
-//         final p1 = topRightFaceEdges[i];
-//         dwarLine(
-//           px: p0.x,
-//           py: p0.y,
-//           qx: p1.x,
-//           qy: p1.y,
-//         );
-//       }
-//     }
-
-//     //* MARK: - Bottom Right
-//     //? =========================================================
-//     final List<Point<int>> bottomRightFaceEdges = partitions[1];
-//     if (bottomRightFaceEdges.length == 9) {
-//       final List<Point<int>> rightEyeBottom = rightEye
-//           .splitInChunks(
-//             chunkSize: rightEye.length ~/ 2,
-//           )
-//           .last;
-
-//       for (var i = 0; i < rightEyeBottom.length; i++) {
-//         final p0 = M7Utils.middlePoint(
-//           from: rightEyeBottom[i],
-//           to: bottomRightFaceEdges[i],
-//         );
-//         final p1 = bottomRightFaceEdges[i];
-//         dwarLine(
-//           px: p0.x,
-//           py: p0.y,
-//           qx: p1.x,
-//           qy: p1.y,
-//         );
-//         if (i != rightEye.length - 1) {
-//           final p2 = rightEyeBottom[i + 1];
-//           dwarLine(
-//             px: p0.x,
-//             py: p0.y,
-//             qx: p2.x,
-//             qy: p2.y,
-//           );
-//         }
-//       }
-//     }
-//   }
-
-//   @override
-//   bool shouldRepaint(M7MeshPainter oldDelegate) {
-//     return oldDelegate.absoluteImageSize != absoluteImageSize ||
-//         oldDelegate.face != face;
-//   }
-// }
+  double _updateRemainingLength({
+    required double delta,
+    required double end,
+    required double availableEnd,
+    required double initialLength,
+  }) {
+    return (delta > 0 && availableEnd == end) ? delta : initialLength;
+  }
+}

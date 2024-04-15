@@ -4,11 +4,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
-class M7MathHelper {
+class MathHelper {
   //* MARK: - Converting class to Singleton
   //? =========================================================
-  M7MathHelper._privateConstructor();
-  static final M7MathHelper instance = M7MathHelper._privateConstructor();
+  MathHelper._privateConstructor();
+  static final MathHelper instance = MathHelper._privateConstructor();
 
   //* MARK: - Public Methods
   //? =========================================================

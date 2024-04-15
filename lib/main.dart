@@ -1,115 +1,428 @@
+import 'dart:io';
+import 'dart:math';
+
+import 'package:collection/collection.dart';
+import 'package:demo_face_livelyness/livelyness_detection.dart';
+import 'package:demo_face_livelyness/target_app/target_app_screen.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import 'index.dart';
+
 void main() {
-  runApp(const MyApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(MaterialApp(
+    home: TargetAppScreen1(),
+  ));
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class TargetAppScreen1 extends StatefulWidget {
+  const TargetAppScreen1({Key? key}) : super(key: key);
 
-  // This widget is the root of your application.
+  @override
+  State<TargetAppScreen1> createState() => _TargetAppScreen1State();
+}
+
+class _TargetAppScreen1State extends State<TargetAppScreen1> {
+  late List<CameraDescription> cameras;
+
+  @override
+  void initState() {
+    super.initState();
+    getCameraList().then((_) => setState(() {}));
+  }
+
+  Future<void> getCameraList() async {
+    try {
+      cameras = await availableCameras();
+    } catch (e) {
+      print('Error on getCameraList() with $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
-        primarySwatch: Colors.blue,
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Home'),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      body: Center(
+        child: ElevatedButton(
+          onPressed: () {
+            Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => TargetAppScreen(),
+                ));
+          },
+          child: Text('Press'),
+        ),
+      ),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class ExpampleScreen extends StatefulWidget {
+  const ExpampleScreen({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<ExpampleScreen> createState() => _ExpampleScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _ExpampleScreenState extends State<ExpampleScreen> {
+  //* MARK: - Private Variables
+  //? =========================================================
+  String? _capturedImagePath;
+  final bool _isLoading = false;
+  bool _startWithInfo = false;
+  bool _allowAfterTimeOut = false;
+  final List<LivelynessStepItem> _veificationSteps = [];
+  int _timeOutDuration = 30;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  //* MARK: - Life Cycle Methods
+  //? =========================================================
+  @override
+  void initState() {
+    _initValues();
+    super.initState();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+      appBar: _buildAppBar(),
+      body: _buildBody(),
+    );
+  }
+
+  //* MARK: - Private Methods for Business Logic
+  //? =========================================================
+  void _initValues() {
+    _veificationSteps.addAll(
+      [
+        LivelynessStepItem(
+          step: LivelynessCheckStep.blink,
+          title: "Blink",
+          isCompleted: false,
+          detectionColor: Colors.amber,
+        ),
+        LivelynessStepItem(
+          step: LivelynessCheckStep.smile,
+          title: "Smile",
+          isCompleted: false,
+          detectionColor: Colors.green.shade800,
+        ),
+      ],
+    );
+    LivelynessDetection.instance.configure(
+      lineColor: Colors.white,
+      dotColor: Colors.purple.shade800,
+      dotSize: 2.0,
+      lineWidth: 2,
+      dashValues: [2.0, 5.0],
+      displayDots: true,
+      displayLines: false,
+      thresholds: [
+        SmileDetectionThreshold(
+          probability: 0.8,
+        ),
+        BlinkDetectionThreshold(
+          leftEyeProbability: 0.25,
+          rightEyeProbability: 0.25,
+        ),
+      ],
+    );
+  }
+
+  void _onStartLivelyness() async {
+    setState(() => _capturedImagePath = null);
+    final dynamic response =
+        await LivelynessDetection.instance.detectLivelyness(
+      context,
+      config: LivelynessDetectionConfig(
+        steps: shuffleList<LivelynessStepItem>(_veificationSteps),
+        startWithInfoScreen: _startWithInfo,
+        maxSecToDetect: _timeOutDuration == 100 ? 2500 : _timeOutDuration,
+        allowAfterMaxSec: _allowAfterTimeOut,
+        captureButtonColor: Colors.red,
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug painting" (press "p" in the console, choose the
-          // "Toggle Debug Paint" action from the Flutter Inspector in Android
-          // Studio, or the "Toggle Debug Paint" command in Visual Studio Code)
-          // to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
+    );
+    if (response == null) {
+      return;
+    }
+    setState(
+      () => _capturedImagePath = response.imgPath,
+    );
+  }
+
+  List<T> shuffleList<T>(List<T> inputList) {
+    // Create a copy of the input list to avoid modifying the original list
+    List<T> shuffledList = List.from(inputList);
+
+    // Use the Fisher-Yates shuffle algorithm to shuffle the list
+    final Random random = Random();
+    for (int i = shuffledList.length - 1; i > 0; i--) {
+      int j = random.nextInt(i + 1);
+      T temp = shuffledList[i];
+      shuffledList[i] = shuffledList[j];
+      shuffledList[j] = temp;
+    }
+
+    return shuffledList;
+  }
+
+  String _getTitle(LivelynessCheckStep step) {
+    switch (step) {
+      case LivelynessCheckStep.blink:
+        return "Blink";
+      case LivelynessCheckStep.turnLeft:
+        return "Turn Your Head Left";
+      case LivelynessCheckStep.turnRight:
+        return "Turn Your Head Right";
+      case LivelynessCheckStep.smile:
+        return "Smile";
+    }
+  }
+
+  String _getSubTitle(LivelynessCheckStep step) {
+    switch (step) {
+      case LivelynessCheckStep.blink:
+        return "Detects Blink on the face visible in camera";
+      case LivelynessCheckStep.turnLeft:
+        return "Detects Left Turn of the on the face visible in camera";
+      case LivelynessCheckStep.turnRight:
+        return "Detects Right Turn of the on the face visible in camera";
+      case LivelynessCheckStep.smile:
+        return "Detects Smile on the face visible in camera";
+    }
+  }
+
+  bool _isSelected(LivelynessCheckStep step) {
+    final LivelynessStepItem? doesExist = _veificationSteps.firstWhereOrNull(
+      (p0) => p0.step == step,
+    );
+    return doesExist != null;
+  }
+
+  void _onStepValChanged(LivelynessCheckStep step, bool value) {
+    if (!value && _veificationSteps.length == 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            "Need to have atleast 1 step of verification",
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
             ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+          ),
+          backgroundColor: Colors.red.shade900,
+        ),
+      );
+      return;
+    }
+    final LivelynessStepItem? doesExist = _veificationSteps.firstWhereOrNull(
+      (p0) => p0.step == step,
+    );
+
+    if (doesExist == null && value) {
+      _veificationSteps.add(
+        LivelynessStepItem(
+          step: step,
+          title: _getTitle(step),
+          isCompleted: false,
+        ),
+      );
+    } else {
+      if (!value) {
+        _veificationSteps.removeWhere(
+          (p0) => p0.step == step,
+        );
+      }
+    }
+    setState(() {});
+  }
+
+  //* MARK: - Private Methods for UI Components
+  //? =========================================================
+  AppBar _buildAppBar() {
+    return AppBar(
+      title: const Text(
+        " Livelyness Detection",
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _buildContent(),
+        Visibility(
+          visible: _isLoading,
+          child: const Center(
+            child: CircularProgressIndicator.adaptive(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildContent() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Spacer(
+          flex: 4,
+        ),
+        Visibility(
+          visible: _capturedImagePath != null,
+          child: Expanded(
+            flex: 7,
+            child: Image.file(
+              File(_capturedImagePath ?? ""),
+              fit: BoxFit.contain,
+            ),
+          ),
+        ),
+        Visibility(
+          visible: _capturedImagePath != null,
+          child: const Spacer(),
+        ),
+        Center(
+          child: ElevatedButton(
+            onPressed: _onStartLivelyness,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(
+                vertical: 10,
+                horizontal: 20,
+              ),
+            ),
+            child: const Text(
+              "Detect Livelyness",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+        const Spacer(),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Spacer(
+              flex: 3,
+            ),
+            const Text(
+              "Start with info screen:",
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            CupertinoSwitch(
+              value: _startWithInfo,
+              onChanged: (value) => setState(
+                () => _startWithInfo = value,
+              ),
+            ),
+            const Spacer(
+              flex: 3,
             ),
           ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+        const Spacer(),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Spacer(
+              flex: 3,
+            ),
+            const Text(
+              "Allow after timer is completed:",
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            CupertinoSwitch(
+              value: _allowAfterTimeOut,
+              onChanged: (value) => setState(
+                () => _allowAfterTimeOut = value,
+              ),
+            ),
+            const Spacer(
+              flex: 3,
+            ),
+          ],
+        ),
+        const Spacer(),
+        Text(
+          "Detection Time-out Duration(In Seconds): ${_timeOutDuration == 100 ? "No Limit" : _timeOutDuration}",
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        Slider(
+          min: 0,
+          max: 100,
+          value: _timeOutDuration.toDouble(),
+          onChanged: (value) => setState(
+            () => _timeOutDuration = value.toInt(),
+          ),
+        ),
+        Expanded(
+          flex: 14,
+          child: ListView.builder(
+            physics: const ClampingScrollPhysics(),
+            itemCount: LivelynessCheckStep.values.length,
+            itemBuilder: (context, index) => ExpansionTile(
+              title: Text(
+                _getTitle(
+                  LivelynessCheckStep.values[index],
+                ),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              children: [
+                ListTile(
+                  title: Text(
+                    _getSubTitle(
+                      LivelynessCheckStep.values[index],
+                    ),
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.normal,
+                    ),
+                  ),
+                  trailing: CupertinoSwitch(
+                    value: _isSelected(
+                      LivelynessCheckStep.values[index],
+                    ),
+                    onChanged: (value) => _onStepValChanged(
+                      LivelynessCheckStep.values[index],
+                      value,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -1,6 +1,8 @@
 import 'dart:math';
 
-class M7Utils {
+import 'package:uuid/uuid.dart';
+
+class Utils {
   static Point<int> middlePoint({
     required Point<int> from,
     required Point<int> to,
@@ -14,5 +16,9 @@ class M7Utils {
       (p0 + q0) ~/ 2,
       (p1 + q1) ~/ 2,
     );
+  }
+
+  static String generate() {
+    return const Uuid().v4();
   }
 }
